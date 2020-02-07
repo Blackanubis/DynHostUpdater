@@ -1,0 +1,24 @@
+﻿<Project Sdk="Microsoft.NET.Sdk.WindowsDesktop">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>netcoreapp3.1</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <ApplicationIcon>DynHostUpdater.ico</ApplicationIcon>
+    <Authors>Thiennet Nicolas</Authors>
+    <Description>A simple application allowing to automatically update at regular intervals the DynHost of my OVH domain.</Description>
+    <NeutralLanguage />
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="MyToolkit" Version="2.5.15" />
+    <PackageReference Include="Newtonsoft.Json" Version="12.0.3" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Update="Settings.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+
+</Project>
