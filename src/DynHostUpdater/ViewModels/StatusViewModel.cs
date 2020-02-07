@@ -6,6 +6,8 @@ using System.Net.Http.Headers;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+using System.Windows.Controls;
+using DynHostUpdater.Helpers;
 using MyToolkit.Command;
 using MyToolkit.Mvvm;
 
@@ -26,7 +28,7 @@ namespace DynHostUpdater.ViewModels
         private bool _isBusy;
         private bool _isDirty;
 
-        private DateTime _lastCheck;
+        private DateTime? _lastCheck;
 
         private string _login;
         private string _password;
@@ -42,9 +44,9 @@ namespace DynHostUpdater.ViewModels
 
         public StatusViewModel()
         {
+            SaveCommand = new AsyncRelayCommand<object>(DoSaveAsync, obj => !IsBusy && IsDirty);
             CancelCommand = new AsyncRelayCommand(DoCancelAsync);
-            SaveCommand = new AsyncRelayCommand(DoSaveAsync);
-            LoadDataAsync();
+            InitAsync();
         }
 
         #endregion
@@ -72,7 +74,13 @@ namespace DynHostUpdater.ViewModels
         public bool IsDirty
         {
             get => _isDirty;
-            set => Set(ref _isDirty, value);
+            set
+            {
+                if (!Set(ref _isDirty, value)) return;
+                
+                SaveCommand.RaiseCanExecuteChanged();
+                CancelCommand.RaiseCanExecuteChanged();
+            }
         }
 
         /// <summary>
@@ -180,7 +188,7 @@ namespace DynHostUpdater.ViewModels
         /// <value>
         ///     The last check.
         /// </value>
-        public DateTime LastCheck
+        public DateTime? LastCheck
         {
             get => _lastCheck;
             set => Set(ref _lastCheck, value);
@@ -193,21 +201,13 @@ namespace DynHostUpdater.ViewModels
         /// <summary>
         ///     Loads the data.
         /// </summary>
-        private async void LoadDataAsync()
+        private async void InitAsync()
         {
             try
             {
                 IsBusy = true;
 
-                TimeToRefresh = App.Configuration.TimeToRefresh;
-
-                HostAdress = App.Configuration.HostAdress;
-
-                UrlUpdater = App.Configuration.UrlUpdater;
-
-                Login = App.Configuration.Login;
-
-                Password = App.Configuration.Password;
+                await LoadDataAsync().ConfigureAwait(false);
 
                 await StartOrRestartTaskAsync().ConfigureAwait(true);
             }
@@ -236,7 +236,9 @@ namespace DynHostUpdater.ViewModels
                 App.Configuration.HostAdress = HostAdress;
                 App.Configuration.UrlUpdater = UrlUpdater;
                 App.Configuration.Login = Login;
-                App.Configuration.Password = Password;
+
+                if (!string.IsNullOrWhiteSpace(Password))
+                    App.Configuration.Password = Password;
 
                 await App.SaveJsonFile().ConfigureAwait(false);
 
@@ -257,7 +259,7 @@ namespace DynHostUpdater.ViewModels
         /// <summary>
         ///     Cancels the data.
         /// </summary>
-        private async Task CancelDataAsync()
+        private async Task LoadDataAsync()
         {
             TimeToRefresh = App.Configuration.TimeToRefresh;
             HostAdress = App.Configuration.HostAdress;
@@ -318,6 +320,8 @@ namespace DynHostUpdater.ViewModels
 
                 await Task.Delay(TimeSpan.FromSeconds(TimeToRefresh)).ConfigureAwait(true);
             }
+
+            await Task.CompletedTask.ConfigureAwait(true);
         }
 
         /// <summary>
@@ -359,14 +363,14 @@ namespace DynHostUpdater.ViewModels
                     throw new ArgumentException(nameof(ip));
 
                 AuthenticationHeaderValue authValue = null;
-
+                
                 if (!string.IsNullOrEmpty(ip) || !string.IsNullOrEmpty(ip))
                     authValue = new AuthenticationHeaderValue("Basic",
-                        Convert.ToBase64String(Encoding.UTF8.GetBytes($"{username}:{password}")));
+                        Convert.ToBase64String(Encoding.UTF8.GetBytes($"{username}:{EncryptionHelper.Decrypt(password)}")));
 
                 var client = new HttpClient
                 {
-                    DefaultRequestHeaders = {Authorization = authValue}
+                    DefaultRequestHeaders = { Authorization = authValue }
                 };
 
                 // make full urlUpdater
@@ -406,14 +410,19 @@ namespace DynHostUpdater.ViewModels
         /// <value>
         /// The save command.
         /// </value>
-        public AsyncRelayCommand SaveCommand { get; }
+        public AsyncRelayCommand<object> SaveCommand { get; }
         /// <summary>
-        ///     Does the save asynchronous.
+        /// Does the save asynchronous.
         /// </summary>
-        /// <returns></returns>
-        private async Task DoSaveAsync()
+        /// <param name="parameter">The parameter.</param>
+        private async Task DoSaveAsync(object parameter)
         {
+            if (parameter is PasswordBox passwordBox)
+                Password = EncryptionHelper.Encrypt(passwordBox.Password);
+
             await SaveDataAsync().ConfigureAwait(true);
+
+            await Task.CompletedTask;
         }
 
         /// <summary>
@@ -430,7 +439,9 @@ namespace DynHostUpdater.ViewModels
         /// <returns></returns>
         private async Task DoCancelAsync()
         {
-            await CancelDataAsync().ConfigureAwait(true);
+            await LoadDataAsync().ConfigureAwait(true);
+
+            await Task.CompletedTask;
         }
 
         #endregion
