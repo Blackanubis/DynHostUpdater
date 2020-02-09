@@ -42,11 +42,15 @@ namespace DynHostUpdater.ViewModels
 
         #region Ctors
 
+        /// <summary>
+        /// Initializes a new instance of the <see cref="StatusViewModel"/> class.
+        /// </summary>
         public StatusViewModel()
         {
             SaveCommand = new AsyncRelayCommand<object>(DoSaveAsync, obj => !IsBusy && IsDirty);
-            CancelCommand = new AsyncRelayCommand(DoCancelAsync);
-            InitAsync();
+            CancelCommand = new AsyncRelayCommand(DoCancelAsync, () => !IsBusy && IsDirty);
+
+            Task.Run(InitAsync);
         }
 
         #endregion
@@ -77,7 +81,7 @@ namespace DynHostUpdater.ViewModels
             set
             {
                 if (!Set(ref _isDirty, value)) return;
-                
+
                 SaveCommand.RaiseCanExecuteChanged();
                 CancelCommand.RaiseCanExecuteChanged();
             }
@@ -201,19 +205,17 @@ namespace DynHostUpdater.ViewModels
         /// <summary>
         ///     Loads the data.
         /// </summary>
-        private async void InitAsync()
+        private async Task InitAsync()
         {
             try
             {
                 IsBusy = true;
 
-                await LoadDataAsync().ConfigureAwait(false);
-
-                await StartOrRestartTaskAsync().ConfigureAwait(true);
+                await LoadDataAsync().ContinueWith(task => StartOrRestartTask());
             }
             catch (Exception e)
             {
-                WriteConsole(e.Message);
+                WriteConsole(e.Message, null);
                 throw;
             }
             finally
@@ -242,11 +244,11 @@ namespace DynHostUpdater.ViewModels
 
                 await App.SaveJsonFile().ConfigureAwait(false);
 
-                await StartOrRestartTaskAsync().ConfigureAwait(true);
+                await StartOrRestartTask();
             }
             catch (Exception e)
             {
-                WriteConsole(e.Message);
+                WriteConsole(e.Message, null);
                 throw;
             }
             finally
@@ -276,72 +278,109 @@ namespace DynHostUpdater.ViewModels
         /// <summary>
         ///     Starts the or restart task.
         /// </summary>
-        public async Task StartOrRestartTaskAsync()
+        private Task StartOrRestartTask()
         {
             if (_autoRefreshCancellationTokenSource != null &&
                 !_autoRefreshCancellationTokenSource.IsCancellationRequested)
+            {
                 _autoRefreshCancellationTokenSource.Cancel();
+            }
 
             _autoRefreshCancellationTokenSource = new CancellationTokenSource();
-            await CheckIPMatchAsync(_autoRefreshCancellationTokenSource).ConfigureAwait(true);
+
+            _ = CheckIPMatchAsync(_autoRefreshCancellationTokenSource.Token);
+
+            return Task.CompletedTask;
         }
 
+
         /// <summary>
-        ///     Refreshes the public ip.
+        /// Refreshes the public ip.
         /// </summary>
-        /// <param name="cancellationTokenSource">The cancellation token source.</param>
-        public async Task CheckIPMatchAsync(CancellationTokenSource cancellationTokenSource)
+        /// <param name="token">The token.</param>
+        public async Task CheckIPMatchAsync(CancellationToken token)
         {
-            while (!cancellationTokenSource.IsCancellationRequested)
+            while (!token.IsCancellationRequested)
             {
                 try
                 {
-                    // Get public IP of workstation
-                    PublicIP = await GetPublicIP().ConfigureAwait(true);
+                    // Get IP public and host
+                    var getPublicIPTask = GetPublicIP(token);
+                    var getHostIPTask = GetHostIP(HostAdress, token);
 
-                    // Get IP of Domaines
-                    HostIP = await GetHostIP(HostAdress).ConfigureAwait(true);
+                    var publicIP = await getPublicIPTask;
+                    var hostIP = await getHostIPTask;
 
-                    // update DynHost if different
-                    if (!string.IsNullOrWhiteSpace(UrlUpdater) &&
-                        HostIP != PublicIP &&
-                        await UpdateDynHost(UrlUpdater, PublicIP, Login, Password))
+                    if (!token.IsCancellationRequested)
                     {
-                        WriteConsole($"{HostIP} updated to {PublicIP}");
-                        HostIP = PublicIP;
+                        PublicIP = publicIP;
+                        HostIP = hostIP;
+
+                        // update DynHost if different
+                        if (!string.IsNullOrWhiteSpace(UrlUpdater) &&
+                            HostIP != PublicIP &&
+                            await UpdateDynHost(UrlUpdater, PublicIP, Login, Password, token))
+                        {
+                            WriteConsole($"{HostIP} updated to {PublicIP}", token);
+                            HostIP = PublicIP;
+                        }
                     }
                 }
                 catch (Exception e)
                 {
-                    WriteConsole(e.Message);
+                    WriteConsole(e.Message, token);
                 }
 
                 LastCheck = DateTime.Now;
 
-                await Task.Delay(TimeSpan.FromSeconds(TimeToRefresh)).ConfigureAwait(true);
+                if (!token.IsCancellationRequested)
+                    await Task.Delay(TimeSpan.FromSeconds(TimeToRefresh), token);
+            }
+        }
+
+        /// <summary>
+        /// Gets the public ip.
+        /// </summary>
+        /// <param name="token">The token.</param>
+        /// <returns></returns>
+        private static async Task<string> GetPublicIP(CancellationToken token)
+        {
+            var ip = string.Empty;
+
+            try
+            {
+                using var webClient = new WebClient();
+                ip = await webClient.DownloadStringTaskAsync("http://icanhazip.com");
+            }
+            catch (Exception e)
+            {
+                WriteConsole(e.Message, token);
             }
 
-            await Task.CompletedTask.ConfigureAwait(true);
+            return ip.Trim();
         }
 
         /// <summary>
-        ///     Gets the public ip.
-        /// </summary>
-        /// <returns></returns>
-        private static async Task<string> GetPublicIP()
-        {
-            return await Task.FromResult(new WebClient().DownloadString("http://icanhazip.com").Trim());
-        }
-
-        /// <summary>
-        ///     Gets the host ip.
+        /// Gets the host ip.
         /// </summary>
         /// <param name="hostAdress">The host urlUpdater.</param>
+        /// <param name="token">The token.</param>
         /// <returns></returns>
-        private static async Task<string> GetHostIP(string hostAdress)
+        private static async Task<string> GetHostIP(string hostAdress, CancellationToken token)
         {
-            var ipaddress = Dns.GetHostAddresses(hostAdress);
-            return await Task.FromResult(ipaddress.Select(ip => ip.ToString()).FirstOrDefault()).ConfigureAwait(true);
+            var ip = string.Empty;
+
+            try
+            {
+                var ipAddress = await Dns.GetHostAddressesAsync(hostAdress);
+                ip = ipAddress.Select(address => address.ToString()).FirstOrDefault();
+            }
+            catch (Exception e)
+            {
+                WriteConsole(e.Message, token);
+            }
+
+            return ip;
         }
 
         /// <summary>
@@ -351,8 +390,9 @@ namespace DynHostUpdater.ViewModels
         /// <param name="ip">The ip.</param>
         /// <param name="username">The username.</param>
         /// <param name="password">The password.</param>
+        /// <param name="token"></param>
         /// <returns></returns>
-        private static async Task<bool> UpdateDynHost(string urlUpdater, string ip, string username, string password)
+        private static async Task<bool> UpdateDynHost(string urlUpdater, string ip, string username, string password, CancellationToken token)
         {
             try
             {
@@ -363,41 +403,49 @@ namespace DynHostUpdater.ViewModels
                     throw new ArgumentException(nameof(ip));
 
                 AuthenticationHeaderValue authValue = null;
-                
+
                 if (!string.IsNullOrEmpty(ip) || !string.IsNullOrEmpty(ip))
                     authValue = new AuthenticationHeaderValue("Basic",
                         Convert.ToBase64String(Encoding.UTF8.GetBytes($"{username}:{EncryptionHelper.Decrypt(password)}")));
 
-                var client = new HttpClient
+                using var client = new HttpClient
                 {
                     DefaultRequestHeaders = { Authorization = authValue }
                 };
 
                 // make full urlUpdater
-                var fullAdress = string.Format(urlUpdater, ip);
+                var uriAdress = string.Format(urlUpdater, ip);
+                if (!uriAdress.StartsWith("http://"))
+                    uriAdress = string.Concat("http://", uriAdress);
 
-                // Get the response.
-                var response = await client.GetAsync(string.Format(fullAdress, ip));
+                if (!token.IsCancellationRequested)
+                {
+                    // Get the response.
+                    var response = await client.GetAsync(uriAdress, token);
 
-                if (response.StatusCode == HttpStatusCode.OK)
-                    return true;
-                WriteConsole(response.StatusCode.ToString());
+                    if (response.StatusCode == HttpStatusCode.OK)
+                        return true;
+
+                    WriteConsole(response.StatusCode.ToString(), token);
+                }
             }
             catch (Exception e)
             {
-                WriteConsole(e.Message);
+                WriteConsole(e.Message, token);
             }
 
-            return await Task.FromResult(false).ConfigureAwait(true);
+            return await Task.FromResult(false);
         }
 
         /// <summary>
-        ///     Writes the console.
+        /// Writes the console.
         /// </summary>
         /// <param name="message">The message.</param>
-        private static void WriteConsole(string message)
+        /// <param name="token">The token.</param>
+        private static void WriteConsole(string message, CancellationToken? token)
         {
-            Console.WriteLine($@"{DateTime.Now:G} : {message}");
+            if (token == null | !token.GetValueOrDefault().IsCancellationRequested)
+                Console.WriteLine($@"{DateTime.Now:G} : {message}");
         }
 
         #endregion
@@ -420,9 +468,7 @@ namespace DynHostUpdater.ViewModels
             if (parameter is PasswordBox passwordBox)
                 Password = EncryptionHelper.Encrypt(passwordBox.Password);
 
-            await SaveDataAsync().ConfigureAwait(true);
-
-            await Task.CompletedTask;
+            await SaveDataAsync();
         }
 
         /// <summary>
@@ -439,9 +485,7 @@ namespace DynHostUpdater.ViewModels
         /// <returns></returns>
         private async Task DoCancelAsync()
         {
-            await LoadDataAsync().ConfigureAwait(true);
-
-            await Task.CompletedTask;
+            await LoadDataAsync();
         }
 
         #endregion

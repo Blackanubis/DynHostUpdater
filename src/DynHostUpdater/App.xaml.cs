@@ -1,7 +1,7 @@
-﻿using System.IO;
+﻿using System;
+using System.IO;
 using System.Text;
 using System.Threading.Tasks;
-using System.Windows;
 using DynHostUpdater.Helpers;
 using DynHostUpdater.Models;
 using Newtonsoft.Json;
@@ -11,7 +11,7 @@ namespace DynHostUpdater
     /// <summary>
     ///     Interaction logic for App.xaml
     /// </summary>
-    public partial class App : Application
+    public partial class App
     {
         #region Fields
 
@@ -28,18 +28,33 @@ namespace DynHostUpdater
 
         private static readonly string _jsonFilePath = "Settings.json";
 
-        private static readonly object _locker = new object();
+        private static readonly object Locker = new object();
 
         #endregion
 
         #region Ctors
 
         /// <summary>
-        ///     Initializes a new instance of the <see cref="App" /> class.
+        /// Initializes a new instance of the <see cref="App"/> class.
         /// </summary>
         public App()
         {
-            Configuration  = LoadOrCreateJsonFile();
+            MainApp().Wait();
+        }
+
+        /// <summary>
+        /// Mains the application.
+        /// </summary>
+        private static async Task MainApp()
+        {
+            try
+            {
+                Configuration = await LoadOrCreateJsonFileAsync();
+            }
+            catch (Exception ex)
+            {
+                Console.Write(ex);
+            }
         }
 
         #endregion
@@ -52,7 +67,7 @@ namespace DynHostUpdater
         /// <value>
         ///     The configuration.
         /// </value>
-        public static Configuration Configuration { get;private set; }
+        public static Configuration Configuration { get; private set; }
 
         #endregion
 
@@ -62,7 +77,7 @@ namespace DynHostUpdater
         ///     Loads the or create json file.
         /// </summary>
         /// <returns></returns>
-        private static Configuration LoadOrCreateJsonFile()
+        private static async Task<Configuration> LoadOrCreateJsonFileAsync()
         {
             var f = new FileInfo(_jsonFilePath);
 
@@ -70,7 +85,7 @@ namespace DynHostUpdater
                 ? new Configuration()
                 : Deserialize(File.ReadAllText(_jsonFilePath));
 
-            return configuration;
+            return await Task.FromResult(configuration);
         }
 
         /// <summary>
@@ -81,7 +96,7 @@ namespace DynHostUpdater
         {
             WriteToFile(Serialize(Configuration));
 
-            await Task.CompletedTask.ConfigureAwait(false);
+            await Task.CompletedTask;
         }
 
         /// <summary>
@@ -90,9 +105,10 @@ namespace DynHostUpdater
         /// <param name="text">The text.</param>
         private static void WriteToFile(string text)
         {
-            lock (_locker)
+            lock (Locker)
             {
                 new FileInfo(_jsonFilePath).Delete();
+
                 var file = new FileStream(
                     _jsonFilePath,
                     FileMode.Create,
@@ -100,7 +116,8 @@ namespace DynHostUpdater
                     FileShare.Read
                 );
 
-                var writer = new StreamWriter(file, Encoding.Unicode);
+                using var writer = new StreamWriter(file, Encoding.Unicode);
+
                 writer.Write(text);
 
                 writer.Dispose();
@@ -117,7 +134,7 @@ namespace DynHostUpdater
         {
             return JsonConvert.SerializeObject(context, JsonSerializerSettings);
         }
-        
+
         /// <summary>
         ///     Deserializes the specified json.
         /// </summary>
